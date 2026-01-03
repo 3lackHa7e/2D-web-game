@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Advanced Platformer (HTML/CSS/JS)</title>
+<style>
+  :root {
+    --bg: #8ecae6;
+    --ground: #073b4c;
+    --platform: #219ebc;
+    --player: #ffb703;
+    --enemy: #ef476f;
+    --coin: #ffd166;
+    --spike: #6a040f;
+  }
+  html,body { height:100%; margin:0; font-family: Inter, system-ui, sans-serif; background:var(--bg);}
+  #gameWrap { display:flex; justify-content:center; align-items:center; height:100vh; }
+  canvas { background: linear-gradient(#cfeff6, #8ecae6); border:8px solid #023047; box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
+  #ui {
+    position: absolute; left:20px; top:16px; color:#023047; font-weight:700;
+    display:flex; gap:12px; align-items:center;
+  }
+  .btn { padding:8px 10px; background:#fff8; border-radius:8px; border:1px solid #0001; cursor:pointer; user-select:none;}
+  #mobileControls { position: absolute; right:12px; bottom:12px; display:none; gap:8px; }
+  .touch { width:60px; height:60px; border-radius:12px; background:#fff8; display:flex; align-items:center; justify-content:center; font-weight:700; }
+  #msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(255,255,255,0.9); padding:18px 24px; border-radius:12px; display:none; text-align:center;}
+  @media (pointer:coarse) {
+    #mobileControls{ display:flex; flex-wrap:wrap; }
+  }
+</style>
+</head>
+<body>
+<div id="gameWrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="ui">
+    <div id="score">Score: 0</div>
+    <div id="lives">Lives: 3</div>
+    <div id="level">Level: 1</div>
+    <button class="btn" id="pauseBtn">Pause</button>
+    <button class="btn" id="restartBtn">Restart</button>
+  </div>
+</div>
+
+<div id="mobileControls">
+  <div class="touch" id="leftBtn">◀</div>
+  <div class="touch" id="rightBtn">▶</div>
+  <div class="touch" id="jumpBtn">▲</div>
+</div>
+
+<div id="msg"></div>
+
+<script>
+/* ======= Advanced Platformer (Single-file) =======
+   - Tile-based world (numbers define tile types)
+   - Player physics with collision
+   - Moving enemies, spikes, coins
+   - Camera scrolling & level switch
+   - Mobile touch buttons included
+*/
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// UI elements
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+const pauseBtn = document.getElementById('pauseBtn');
+const restartBtn = document.getElementById('restartBtn');
+const msg = document.getElementById('msg');
+const mobileControls = document.getElementById('mobileControls');
+
+let paused = false;
+pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; };
+restartBtn.onclick = () => startLevel(currentLevelIndex);
+
+// Basic settings
+const tileSize = 48;    // tile pixel size
+const gravity = 1600;   // px / s^2
+const friction = 0.9;
+let keys = { left:false, right:false, up:false };
+
+// mobile buttons
+['leftBtn','rightBtn','jumpBtn'].forEach(id=>{
+  const b=document.getElementById(id);
+  if(b){
+    b.addEventListener('touchstart', e=>{ e.preventDefault(); if(id==='leftBtn') keys.left=true; if(id==='rightBtn') keys.right=true; if(id==='jumpBtn') keys.up=true;});
+    b.addEventListener('touchend', e=>{ e.preventDefault(); if(id==='leftBtn') keys.left=false; if(id==='rightBtn') keys.right=false; if(id==='jumpBtn') keys.up=false;});
+  }
+});
+
+// Keyboard
+window.addEventListener('keydown', e=>{
+  if(e.key === 'ArrowLeft' || e.key === 'a') keys.left = true;
+  if(e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
+  if(e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') keys.up = true;
+  if(e.key === 'p') paused = !paused;
+});
+window.addEventListener('keyup', e=>{
+  if(e.key === 'ArrowLeft' || e.key === 'a') keys.left = false;
+  if(e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
+  if(e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') keys.up = false;
+});
+
+// Tile types
+// 0: empty, 1: solid platform, 2: coin, 3: spike (hazard), 4: player spawn, 5: goal, 6: moving platform (treated as solid), 7: enemy spawn
+// We'll use arrays of integers for levels.
+const levels = [
+  // Level 1: array of rows strings for visual editing (L->R). Use characters mapping below.
+  [
+    "..................................................",
+    "..................................................",
+    ".....C.................C...............C.........",
+    "....PPP.............PPPPPP.............PPP.......",
+    "..................PPP...........PPP..............",
+    "..............PPP.........EE....................",
+    ".................................PPP.............",
+    ".........PPP............................GG......",
+    "P.............PPPP......PPPP.PPP.................",
+    "P................................................",
+    "P.....F..........................................",
+    "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP"
+  ],
+  // Level 2: more hazards and moving enemies
+  [
+    "..............................................................",
+    "..............................................................",
+    "........C......E...........C.............C..........E........",
+    "......PPPP...........PPP........PPP................PPPP......",
+    "..................................SSS..............PPP.......",
+    "......S..............PPP....PPP.......................G......",
+    "........PPP........................PPP......................",
+    "....PPP........PPPP.............PPPPP........PPP.............",
+    "P.................PPP.....S..................PPP.............",
+    "P......................PPPPPPPPPPPPPPPP...........P..........",
+    "P......F.....................................................",
+    "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP"
+  ]
+];
+
+// mapping characters to tile numbers
+const charMap = {
+  '.':0, 'P':1, 'C':2, 'S':3, 'F':4, 'G':5, 'M':6, 'E':7
+};
+
+// Convert level strings to numeric tile map
+function parseLevel(lines) {
+  const h = lines.length;
+  const w = Math.max(...lines.map(r=>r.length));
+  const map = Array.from({length:h}, ()=>Array(w).fill(0));
+  for(let y=0;y<h;y++){
+    for(let x=0;x<lines[y].length;x++){
+      const ch = lines[y][x];
+      map[y][x] = charMap[ch] ?? 0;
+    }
+  }
+  return { map, w, h };
+}
+
+// Game objects
+let currentLevelIndex = 0;
+let level, tiles, levelW, levelH;
+let player, enemies = [], coins = [], spikes = [], goal = null, platforms = [];
+let camera = { x:0, y:0 };
+let score = 0, lives = 3;
+
+// Utility
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+// Initialize level
+function startLevel(i=0){
+  currentLevelIndex = i % levels.length;
+  const parsed = parseLevel(levels[currentLevelIndex]);
+  tiles = parsed.map;
+  levelW = parsed.w; levelH = parsed.h;
+
+  // reset objects
+  enemies=[]; coins=[]; spikes=[]; platforms=[]; goal=null;
+  player = { x:0, y:0, w:32, h:40, vx:0, vy:0, onGround:false, canDoubleJump:true };
+
+  for(let y=0;y<levelH;y++){
+    for(let x=0;x<levelW;x++){
+      const t = tiles[y][x];
+      const px = x*tileSize, py = y*tileSize;
+      if(t===2) coins.push({x:px+tileSize/4, y:py+tileSize/4, w:tileSize/2, h:tileSize/2, collected:false});
+      if(t===3) spikes.push({x:px, y:py+tileSize/2, w:tileSize, h:tileSize/2});
+      if(t===5) goal = {x:px, y:py, w:tileSize, h:tileSize};
+      if(t===6 || t===1) platforms.push({x:px, y:py, w:tileSize, h:tileSize, type:t});
+      if(t===7) enemies.push({x:px, y:py, w:tileSize-8, h:tileSize-8, vx:80, dir:1});
+      if(t===4){ player.x = px + (tileSize-player.w)/2; player.y = py - player.h + 2; }
+    }
+  }
+
+  // if no spawn found, put at start
+  if(!player.x) { player.x = tileSize*1.5; player.y = (levelH-3)*tileSize; }
+
+  // scale mobile control visibility
+  mobileControls.style.display = (('ontouchstart' in window) ? 'flex' : 'none');
+
+  score = 0;
+  lives = 3;
+  currentLevelIndex = i;
+  updateUI();
+  camera.x = 0; camera.y = 0;
+  paused = false;
+  msg.style.display = 'none';
+}
+
+// Tile collision detection helpers
+function tileAtPixel(px, py){
+  const tx = Math.floor(px / tileSize);
+  const ty = Math.floor(py / tileSize);
+  if(ty<0 || ty>=levelH || tx<0 || tx>=levelW) return 0;
+  return tiles[ty][tx];
+}
+
+function isSolidAtPixel(px, py){
+  const t = tileAtPixel(px, py);
+  return t === 1 || t===6;
+}
+
+// rectangle collision
+function rectIntersect(a,b){
+  return !(a.x + a.w <= b.x || a.x >= b.x + b.w || a.y + a.h <= b.y || a.y >= b.y + b.h);
+}
+
+// Main update loop
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.05, (now - last)/1000);
+  last = now;
+  if(!paused) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// Update physics & game logic
+function update(dt){
+  // input horizontal
+  const accel = 2200;
+  const maxSpeed = 360;
+  if(keys.left) player.vx -= accel * dt;
+  if(keys.right) player.vx += accel * dt;
+  // apply gravity
+  player.vy += gravity * dt;
+
+  // jump
+  if(keys.up){
+    if(player.onGround){
+      player.vy = -680; player.onGround = false; player.canDoubleJump = true;
+    } else if(player.canDoubleJump){
+      player.vy = -600; player.canDoubleJump = false;
+    }
+    // prevent repeated auto-jump until key released
+    keys.up = false;
+  }
+
+  // friction and clamp
+  player.vx *= 0.98;
+  player.vx = clamp(player.vx, -maxSpeed, maxSpeed);
+
+  // predict position
+  let nx = player.x + player.vx * dt;
+  let ny = player.y + player.vy * dt;
+
+  // simple AABB collision vs tile map: move separately X then Y
+  // Move X
+  let px = nx, py = player.y;
+  const bboxX = { x:px, y:py, w:player.w, h:player.h };
+  if(checkTileCollision(bboxX)){
+    // collision: try smaller steps (simple resolution)
+    const sign = Math.sign(player.vx) || 1;
+    while(player.vx !== 0 && Math.abs(player.vx) > 0.1){
+      px = player.x + sign * 0.5;
+      bboxX.x = px;
+      if(checkTileCollision(bboxX)){ break; }
+      player.x = px;
+      player.vx = 0;
+      break;
+    }
+    nx = player.x;
+  } else {
+    player.x = nx;
+  }
+
+  // Move Y
+  let pyNew = ny;
+  const bboxY = { x:player.x, y:pyNew, w:player.w, h:player.h };
+  player.onGround = false;
+  if(checkTileCollision(bboxY)){
+    // if moving down, land on top of tile
+    if(player.vy > 0){
+      // align to nearest tile top
+      const footY = Math.floor((player.y + player.h + player.vy*dt) / tileSize) * tileSize;
+      player.y = footY - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    } else {
+      // hit head
+      player.vy = 0;
+    }
+  } else {
+    player.y = pyNew;
+  }
+
+  // clamp to world bottom (death)
+  if(player.y > levelH*tileSize + 200){
+    loseLife();
+  }
+
+  // collect coins
+  for(const coin of coins){
+    if(!coin.collected && rectIntersect({x:player.x,y:player.y,w:player.w,h:player.h}, coin)){
+      coin.collected = true; score += 10; updateUI();
+    }
+  }
+
+  // spikes
+  for(const s of spikes){
+    if(rectIntersect({x:player.x,y:player.y,w:player.w,h:player.h}, s)){
+      // take damage
+      loseLife();
+    }
+  }
+
+  // goal check
+  if(goal && rectIntersect({x:player.x,y:player.y,w:player.w,h:player.h}, goal)){
+    // next level or finish
+    currentLevelIndex++;
+    if(currentLevelIndex >= levels.length){
+      showMessage("You finished all levels! Score: " + score + " (Restarting)", ()=>startLevel(0));
+    } else {
+      startLevel(currentLevelIndex);
+    }
+    return;
+  }
+
+  // update enemies
+  for(const e of enemies){
+    // simple horizontal patrol
+    e.x += e.vx * dt;
+    // turn around if hitting solid tile ahead or at edge
+    const aheadX = e.vx > 0 ? e.x + e.w + 2 : e.x - 2;
+    const belowAhead = { x: aheadX, y: e.y + e.h + 2, w: 2, h:2 };
+    if(isSolidAtPixel(aheadX + (e.vx>0?e.w:0), e.y + e.h + 4) === false || isSolidAtPixel(aheadX, e.y) ){
+      e.vx *= -1;
+    }
+    // collision with player
+    if(rectIntersect(e, {x:player.x,y:player.y,w:player.w,h:player.h})){
+      // if player lands on enemy from above, kill enemy; else player loses life
+      if(player.vy > 0 && (player.y + player.h) - e.y < 18){
+        // stomp
+        score += 20; updateUI();
+        // remove enemy by moving it off screen
+        e.x = -9999; e.y = -9999; e.vx = 0;
+        player.vy = -300; // bounce
+      } else {
+        loseLife();
+      }
+    }
+  }
+
+  // camera follow player smoothly
+  const camSpeed = 8;
+  const targetX = player.x + player.w/2 - W/2;
+  const targetY = player.y + player.h/2 - H/2;
+  camera.x += (targetX - camera.x) * Math.min(1, camSpeed * dt);
+  camera.y += (targetY - camera.y) * Math.min(1, camSpeed * dt);
+
+  // clamp camera to world bounds
+  camera.x = clamp(camera.x, 0, Math.max(0, levelW*tileSize - W));
+  camera.y = clamp(camera.y, 0, Math.max(0, levelH*tileSize - H));
+}
+
+// Checks whether rectangle collides with any solid tile
+function checkTileCollision(rect){
+  const startX = Math.floor(rect.x / tileSize);
+  const endX = Math.floor((rect.x + rect.w) / tileSize);
+  const startY = Math.floor(rect.y / tileSize);
+  const endY = Math.floor((rect.y + rect.h) / tileSize);
+  for(let y=startY; y<=endY; y++){
+    for(let x=startX; x<=endX; x++){
+      if(y<0 || y>=levelH || x<0 || x>=levelW) continue;
+      const t = tiles[y][x];
+      if(t===1 || t===6){
+        // solid tile
+        const tx=x*tileSize, ty=y*tileSize;
+        if(rect.x < tx+tileSize && rect.x+rect.w > tx && rect.y < ty+tileSize && rect.y+rect.h > ty){
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Lose life & respawn
+function loseLife(){
+  lives--;
+  updateUI();
+  if(lives <= 0){
+    showMessage("Game Over! Score: " + score, ()=>startLevel(0));
+  } else {
+    // respawn player to spawn tile F
+    for(let y=0;y<levelH;y++){
+      for(let x=0;x<levelW;x++){
+        if(tiles[y][x] === 4){
+          player.x = x*tileSize + (tileSize-player.w)/2;
+          player.y = y*tileSize - player.h + 2;
+          player.vx = 0; player.vy = 0;
+          return;
+        }
+      }
+    }
+    // fallback
+    player.x = tileSize*1.5; player.y = (levelH-3)*tileSize;
+    player.vx = player.vy = 0;
+  }
+}
+
+// Draw everything
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // background parallax simple
+  ctx.fillStyle = "#bde0fe";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.save();
+  ctx.translate(-camera.x, -camera.y);
+
+  // draw tiles
+  for(let y=0;y<levelH;y++){
+    for(let x=0;x<levelW;x++){
+      const t = tiles[y][x];
+      if(t===0) continue;
+      const px = x*tileSize, py = y*tileSize;
+      if(t===1 || t===6){
+        ctx.fillStyle = (t===1) ? getComputedStyle(document.documentElement).getPropertyValue('--platform').trim() : '#2a9d8f';
+        ctx.fillRect(px,py,tileSize,tileSize);
+        // subtle top highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(px,py,tileSize,6);
+      } else if(t===2){
+        // coin tile is shown via coin list
+      } else if(t===3){
+        // spike
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--spike').trim();
+        ctx.beginPath();
+        ctx.moveTo(px, py+tileSize);
+        ctx.lineTo(px+tileSize/2, py+tileSize/4);
+        ctx.lineTo(px+tileSize, py+tileSize);
+        ctx.closePath();
+        ctx.fill();
+      } else if(t===4){
+        // spawn
+        ctx.fillStyle = '#ffffff30';
+        ctx.fillRect(px+8,py+8,tileSize-16,tileSize-16);
+      } else if(t===5){
+        ctx.fillStyle = '#2b9348';
+        ctx.fillRect(px+6, py+6, tileSize-12, tileSize-12);
+        ctx.fillStyle = '#fff';
+        ctx.fillText('G', px+tileSize/3, py+tileSize*0.7);
+      } else if(t===7){
+        // enemy spawn marker (invisible in gameplay; show faint)
+        ctx.fillStyle = '#ef476f22';
+        ctx.fillRect(px,py,tileSize,tileSize);
+      }
+    }
+  }
+
+  // moving platforms & enemies etc. (enemies drawn separately)
+  // draw coins
+  for(const coin of coins){
+    if(coin.collected) continue;
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--coin').trim();
+    const cx = coin.x, cy = coin.y, cw = coin.w, ch = coin.h;
+    ctx.beginPath();
+    ctx.ellipse(cx + cw/2, cy + ch/2, cw/2, ch/2, 0, 0, Math.PI*2);
+    ctx.fill();
+    // shine
+    ctx.fillStyle='rgba(255,255,255,0.6)';
+    ctx.fillRect(cx + cw*0.55, cy + ch*0.15, cw*0.12, ch*0.12);
+  }
+
+  // draw spikes (already drawn from tiles but double-check dynamic)
+  for(const s of spikes){
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--spike').trim();
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y + s.h);
+    ctx.lineTo(s.x + s.w/2, s.y);
+    ctx.lineTo(s.x + s.w, s.y + s.h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // draw enemies
+  for(const e of enemies){
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--enemy').trim();
+    ctx.fillRect(e.x + 4, e.y + 4, e.w, e.h);
+    // eyes
+    ctx.fillStyle = '#000';
+    ctx.fillRect(e.x + e.w*0.25 + 4, e.y + e.h*0.25 + 4, 4, 4);
+    ctx.fillRect(e.x + e.w*0.6 + 4, e.y + e.h*0.25 + 4, 4, 4);
+  }
+
+  // draw player
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--player').trim();
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+  // eyes
+  ctx.fillStyle = '#000';
+  ctx.fillRect(player.x + player.w*0.2, player.y + player.h*0.25, 4, 4);
+  ctx.fillRect(player.x + player.w*0.6, player.y + player.h*0.25, 4, 4);
+
+  ctx.restore();
+
+  // HUD drawn without camera transform
+  // already handled by HTML UI elements
+}
+
+// update UI
+function updateUI(){
+  scoreEl.textContent = "Score: " + score;
+  livesEl.textContent = "Lives: " + lives;
+  levelEl.textContent = "Level: " + (currentLevelIndex + 1);
+}
+
+// show message overlay
+function showMessage(text, cb){
+  msg.style.display = 'block';
+  msg.innerHTML = `<div style="font-size:20px;font-weight:800;margin-bottom:8px">${text}</div>
+  <div style="font-size:14px"><button id="msgOk" style="padding:8px 12px;border-radius:8px;border:0;background:#023047;color:#fff;cursor:pointer">OK</button></div>`;
+  document.getElementById('msgOk').onclick = ()=>{
+    msg.style.display = 'none';
+    if(cb) cb();
+  };
+}
+
+// start
+startLevel(0);
+last = performance.now();
+requestAnimationFrame(loop);
+
+/* ====== Notes & next steps you can implement easily:
+   - Add spritesheet animations for player/enemy
+   - Add level editor to design tiles visually
+   - Save high score in localStorage
+   - Add sound effects (jump, coin, death)
+   - Add more enemy types: flyers, shooters
+   - Improve collision resolution for slopes
+*/
+</script>
+</body>
+</html>
