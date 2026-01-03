@@ -79,4 +79,4 @@ Distributed under the MIT License.
 
 ---
 
-**Created by [3lackHa7e**](https://www.google.com/search?q=https://github.com/3lackHa7e)
+**Created by [3lackHa7e](https://www.google.com/search?q=https://github.com/3lackHa7e)**
